@@ -1,0 +1,9 @@
+numpy>=1.24
+opencv-python>=4.8
+PyYAML>=6.0
+torch>=2.2
+kornia>=0.7
+lightglue @ git+https://github.com/cvg/LightGlue.git
+pytest>=8.0
+requests>=2.31
+rasterio>=1.3

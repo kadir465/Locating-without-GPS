@@ -1,0 +1,52 @@
+camera:
+  camera_matrix:
+  - [500.0, 0.0, 320.0]
+  - [0.0, 500.0, 240.0]
+  - [0.0, 0.0, 1.0]
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+  image_height: 480
+  image_width: 640
+flow:
+  chi2_threshold_2dof: 5.99
+  max_bidirectional_error_px: 1.5
+  max_side_px: 1280
+  min_features: 40
+  noise_std_mps: 0.8
+  pzz_reject_threshold_m2: 16.0
+  rate_hz: 10.0
+gate:
+  chi2_threshold_2dof: 5.99
+  chi2_threshold_3dof: 9.0
+  inconsistency_threshold_m: 25.0
+  kinematic_tolerance_m: 5.0
+  max_consecutive_rejections: 5
+  max_consecutive_vision_loss: 8
+  max_position_correction_m: 3.0
+  max_position_trace_m2: 100.0
+  max_yaw_correction_deg: 5.0
+  min_measurement_variance_m2: 0.05
+  vmax_mps: 15.0
+gravity_enu_mps2: [0.0, 0.0, -9.80665]
+imu_rate_hz: 100.0
+lightglue:
+  enabled: false
+  image_size_px: 256
+  roi_base_window_m: 20.0
+  roi_max_window_m: 80.0
+  roi_padding_sigma: 3.0
+  roi_prediction_latency_s: 0.2
+noise:
+  accel_bias_rw_std_mps2: 0.01
+  accel_noise_std_mps2: 0.35
+  gyro_bias_rw_std_rps: 0.0015
+  gyro_noise_std_rps: 0.03
+observability:
+  command_id: 31000
+  trigger_once: true
+  velocity_trace_limit_m2ps2: 25.0
+timing:
+  history_buffer_seconds: 0.5
+  initial_time_delay_s: 0.0
+  lightglue_budget_ms: 80.0
+  max_time_delay_s: 0.5
+  total_vision_budget_ms: 500.0

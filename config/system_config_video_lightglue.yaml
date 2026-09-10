@@ -1,0 +1,35 @@
+lightglue:
+  enabled: true
+  require_cuda: true
+  device: cuda
+  image_size_px: 384
+  use_amp: true
+  min_matches: 6
+  min_inliers: 5
+  min_confidence: 0.08
+  min_inlier_ratio: 0.10
+  ransac_reproj_threshold_px: 3.25
+  filter_threshold: 0.03
+  depth_confidence: 0.95
+  width_confidence: 0.99
+  gpu_target_duty_cycle: 0.65
+  gpu_min_interval_s: 0.20
+  gpu_max_interval_s: 5.00
+  yaw_hypotheses_per_job: 4
+  warmup_runs: 2
+  use_clahe: true
+  roi_base_window_m: 60.0
+  roi_prediction_latency_s: 0.20
+  roi_max_window_m: 110.0
+  roi_padding_sigma: 3.0
+  residual_gate_m: 25.0
+  scale_consistency_min: 0.50
+  scale_consistency_max: 1.50
+  scale_consistency_min_distance_m: 1.0
+  trust_gain_min: 0.05
+  trust_gain_max: 0.45
+
+superpoint:
+  max_keypoints: 4096
+  keypoint_threshold: 0.0025
+  nms_radius: 4
