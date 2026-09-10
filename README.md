@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ﻿# Advanced Localization Prototype
 
 Hierarchical visual-inertial localization stack for GPS-denied flight.
@@ -74,3 +75,6 @@ python scripts/run_video_testing.py --video video/your_flight.mp4 --srt path/to/
 
 7. For ROS 2 usage, source your ROS 2 workspace and run the node module from `src/advanced_localization/ros2/navigation_node.py`.
 
+=======
+# Locating-without-GPS
+>>>>>>> aec8c4d17f8d095062ed9031911163d75619a3fa
