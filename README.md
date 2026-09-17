@@ -33,57 +33,85 @@ Sistem, hem **Python** (algoritma doğrulama, simülasyon, video/telemetri testl
 
 ---
 
-## 🎯 Proje Genel Bakış
+## 🎯 Proje Genel Bakış ve Çözülen Problemler
 
-Geleneksel otopilotlar GPS kesildiğinde sadece IMU ile ölü kestirim (Dead Reckoning) yapar. Ancak ivmeölçer ve jiroskop gürültüleri zamanla birikerek (drift) uçağın dakikalar içinde rotadan sapmasına neden olur.
+Geleneksel otopilotlar GPS kesildiğinde yalnızca dahili IMU (ivmeölçer ve jiroskop) verilerini çift entegre ederek ölü kestirim (Dead Reckoning) yapar. Sensörlerdeki beyaz gürültü ve bias kaymaları, tahmin hatasının kuadratik/kübik büyümesine ve uçağın saniyeler içinde rotadan sapıp düşmesine yol açar.
 
-Bu proje sorunu **çok sensörlü ve çok katmanlı füzyon** ile çözer:
-1. **Kısa vadeli kaymayı önleme:** Yere bakan monoküler kameradan yüksek frekansta (30 Hz) optik akış çıkarılarak yatay hız kestirilir.
-2. **Uzun vadeli kaymayı sıfırlama:** Uçuş öncesi indirilen uydu haritası ile canlı kamera görüntüsü derin öğrenme (SuperPoint + LightGlue) ile periyodik olarak (~1 Hz) eşleştirilerek **metre altı / santimetre mertebesinde mutlak coğrafi konum** bulunur.
-3. **Zaman gecikmeli füzyon:** Ağır derin öğrenme çıkarımlarının gecikmesi, **Gecikmeli ESKF Halka Tamponu (Ring Buffer Replay)** ile telafi edilir.
+Bu projede geliştirilen sistem, GPS'in olmadığı ortamlarda aşağıdaki 5 kritik mühendislik problemini katmanlı yaklaşımla çözer:
+
+| Karşılaşılan Problem | Neden Oluşur? | Uygulanan Mühendislik Çözümü |
+| :--- | :--- | :--- |
+| **1. IMU Sapması (Drift)** | Sensör gürültüleri ve bias kayması hatayı katlayarak büyütür. | **İki Kademeli Düzeltme:** 30 Hz KLT Optik Akış ile yatay hız (velocity) kilitlenir; 1 Hz mutlak harita eşleme ile birikimli konum hatası sıfırlanır. |
+| **2. Yapay Zeka Gecikmesi (100–300 ms)** | SuperPoint + LightGlue modellerinin GPU çıkarım süresi gecikmeye sebep olur. Uçak bu sürede metrelerce yol alır. | **Halka Tampon (Ring Buffer) ve Tarihsel Replay:** Ölçüm geldiğinde $t_d$ kadar geriye gidilir, Kalman düzeltmesi o ana uygulanır ve ara IMU verileriyle filtre günümüz anına hızla tekrar ileri sarılır. |
+| **3. Hatalı Eşleşmeler (Outliers)** | Benzer bina çatıları, tarla dokuları veya perspektif farkları yanlış nokta eşleştirebilir. | **Çok Kriterli Geometrik Doğrulama:** Çift Modelli RANSAC (Düz arazi için Homografi, engebeli arazi için Temel Matris), İrtifa-Ölçek tutarlılık kontrolü ve Mahalanobis mesafe kapılama ($d_M \le 9.21$). |
+| **4. Mevsim ve Işık Değişimi (Domain Shift)** | Uydu haritası ile dron kamerası arasında güneş açısı, kar/yeşillik veya gölge farkları bulunur. | **SuperPoint + LightGlue + Dinamik ROI:** Derin öğrenme tabanlı bağlamsal eşleme, CLAHE kontrast dengelemesi ve uçağın $3\sigma$ kovaryansına göre haritadan dinamik pencere kesme. |
+| **5. Eksen ve Protokol Uyuşmazlığı** | Otopilot (PX4) havacılık standardı (NED/FRD) kullanırken, navigasyon algoritmaları robotik standardı (ENU/FLU) kullanır. | **İzole Koordinat Adaptörü & uXRCE-DDS:** MAVROS aracı katmanını kaldırıp mikrosaniye seviyesinde yerel PX4 DDS köprüsü ve güvenli eksen dönüşümü. |
 
 ---
 
 ## 🏗 Sistem Mimarisi ve Katmanlar
 
+Aşağıdaki mimari şema, uçuş öncesi hazırlıktan otopilot motor kontrolüne kadar veri akışını özetlemektedir:
+
 ```mermaid
 flowchart TD
-    subgraph PreFlight ["Katman 0: Ön Hazırlık"]
-        MB[Mapbox Satellite API] --> MapPipeline[preflight_map_pipeline.py]
-        MapPipeline --> GeoTIFF["GeoTIFF Referans Harita (Grayscale + CLAHE)"]
+    subgraph PreFlight ["Katman 0: Uçuş Öncesi Hazırlık"]
+        MB["Mapbox Uydu Servisi"] --> MapPipeline["preflight_map_pipeline.py"]
+        MapPipeline --> GeoTIFF["GeoTIFF Referans Harita<br/>Grayscale + CLAHE Filtresi"]
     end
 
-    subgraph Sensors ["Sensör Girişleri"]
-        IMU["Pixhawk IMU (100 Hz)<br/>[ax, ay, az, gx, gy, gz]"]
-        CAM["Aşağı Bakan Kamera (30 Hz)<br/>[Monoküler Görüntü]"]
-        BARO["Barometre / Telemetri<br/>[İrtifa / Z]"]
+    subgraph Sensors ["Uçuş Sensörleri"]
+        IMU["Pixhawk IMU - 100 Hz<br/>İvmeölçer ve Jiroskop"]
+        CAM["Aşağı Bakan Kamera - 30 Hz<br/>Monoküler Canlı Görüntü"]
+        BARO["Barometre ve Telemetri<br/>İrtifa Z Ölçümü"]
     end
 
-    subgraph Estimator ["Füzyon Motoru (Orin Nano / C++ & Python)"]
-        IMU -->|Tahmin Adımı| ESKF["16-Durumlu Gecikmeli ESKF<br/>[p, v, q, b_a, b_g, t_d]"]
+    subgraph Estimator ["Füzyon Motoru - Orin Nano"]
+        IMU -->|"Tahmin Adımı - 100 Hz"| ESKF["16-Durumlu Gecikmeli ESKF<br/>Konum, Hız, Oryantasyon, Biaslar, Gecikme"]
         
-        CAM -->|Katman 1.5 - 30 Hz| KLT["KLT Optik Akış<br/>(Pseudo-Velocity)"]
+        CAM -->|"Katman 1.5 - 30 Hz"| KLT["KLT Optik Akış<br/>Yatay Hız Kestirimi"]
         BARO --> KLT
-        KLT -->|Hız Düzeltmesi| ESKF
+        KLT -->|"Hız Güncellemesi"| ESKF
 
-        CAM -->|Katman 2 & 3 - 1 Hz| LG["SuperPoint + LightGlue<br/>+ Multi-Model RANSAC"]
-        GeoTIFF -->|Dinamik ROI Kırpma| LG
-        LG -->|Gecikmeli Mutlak Poz (td)| RingBuf["Ring Buffer (Tarihsel Geri Sarma)"]
-        RingBuf -->|Gecikmeli Ölçüm Güncellemesi| ESKF
+        CAM -->|"Katman 2 ve 3 - 1 Hz"| LG["SuperPoint ve LightGlue<br/>Çift Modelli RANSAC"]
+        GeoTIFF -->|"Kovaryans Güdümlü Dinamik ROI"| LG
+        LG -->|"Gecikmeli Mutlak Poz"| RingBuf["TimeIndexedRingBuffer<br/>Tarihsel Geri Sarma"]
+        RingBuf -->|"Gecikmeli Kalman Düzeltmesi"| ESKF
     end
 
     subgraph Output ["Otopilot Entegrasyonu"]
-        ESKF -->|NED Dönüşümü| DDS["PX4 uXRCE-DDS Köprüsü<br/>/fmu/in/vehicle_visual_odometry"]
-        DDS --> PX4["Pixhawk Otopilot (EKF2)"]
-        ESKF --> Status["/advanced_localization/status<br/>(Failsafe & Kovaryans Takibi)"]
+        ESKF -->|"NED Eksen Dönüşümü"| DDS["PX4 uXRCE-DDS Köprüsü<br/>/fmu/in/vehicle_visual_odometry"]
+        DDS --> PX4["Pixhawk Otopilot - EKF2"]
+        ESKF --> Status["/advanced_localization/status<br/>Failsafe ve Durum Bildirimi"]
     end
 ```
 
-### Katman Detayları
-* **Layer 0 (Pre-Flight Map):** Uçulacak alanın uydu görüntülerinden CLAHE kontrast iyileştirmesi yapılmış, GSD (Ground Sampling Distance) etiketli GeoTIFF harita oluşturulur.
-* **Layer 1 (ESKF - 100 Hz):** 16 durumlu `[p (konum 3), v (hız 3), q (oryantasyon 4), b_a (ivmeölçer bias 3), b_g (jiroskop bias 3), t_d (kamera gecikmesi 1)]` Hata Durumlu Kalman Filtresi.
-* **Layer 1.5 (KLT Optik Akış - 30 Hz):** Ardışık video kareleri arasındaki piksel yer değiştirmelerinden ve irtifadan yatay hız vektörü üretilir.
-* **Layer 2 & 3 (Hassas Harita Eşleme - 1 Hz):** Uçağın tahmin kovaryansına göre haritadan dinamik bir ROI (Region of Interest) kırpılır. SuperPoint ile çıkarılan öznitelikler LightGlue ile eşleştirilir; Homografi ve Temel Matris (Fundamental) testleri ile mutlak koordinat üretilir.
+### Katman Detayları ve Algoritmik Çözüm Adımları
+
+#### 🔹 Katman 0: Coğrafi Referans Haritası Üretimi (Pre-Flight Pipeline)
+* **Adım:** Uçuş yapılacak koordinatların merkez enlem/boylamı, yarıçapı ve piksel başına zemin çözünürlüğü (GSD) belirlenir.
+* **İşlem:** Mapbox API üzerinden yüksek çözünürlüklü uydu karoları (tiles) indirilir, mozaiklenir ve GeoTIFF formatına dönüştürülür.
+* **İyileştirme:** Farklı güneş açıları ve aydınlatma farklarına karşı **CLAHE (Contrast Limited Adaptive Histogram Equalization)** uygulanarak haritanın yerel kontrastı normalize edilir.
+
+#### 🔹 Katman 1: 16-Durumlu Hata Durumlu Kalman Filtresi (ESKF - 100 Hz)
+* **Adım:** Pixhawk'tan gelen 100 Hz IMU ölçümleri integrasyon denklemine sokulur.
+* **Durum Vektörü:** $\mathbf{x} = [\mathbf{p}_{3\times 1}, \mathbf{v}_{3\times 1}, \mathbf{q}_{4\times 1}, \mathbf{b}_a_{3\times 1}, \mathbf{b}_g_{3\times 1}, t_d]_{16\times 1}$
+* **Özellik:** Standart EKF yerine açılardaki singülerlikleri (gimbal lock) engelleyen ve kuaterniyon kinematiğinde hata durumunu lineere yakın tutan **Hata Durumu (Error-State)** formülasyonu kullanılır.
+
+#### 🔹 Katman 1.5: Bağıl Hız Gözlemcisi (KLT Optik Akış - 30 Hz)
+* **Adım:** Yere bakan monoküler kameradan gelen ardışık iki kare arasında Lucas-Kanade (KLT) algoritmasıyla belirgin pikseller takip edilir.
+* **İşlem:** Piksel kayması ($\Delta u, \Delta v$) ve barometrik irtifa ($h$) kullanılarak uçağın yerdeki anlık yatay hızı ($\hat{v}_x, \hat{v}_y$) hesaplanır.
+* **Çözüm:** Harita eşleşmesi beklenirken (1 sn boyunca) İHA'nın IMU kaymasını sıfıra yakın tutar.
+
+#### 🔹 Katman 2 & 3: Mutlak Coğrafi Eşleme (SuperPoint + LightGlue - 1 Hz)
+* **Adım 1 (Dinamik ROI):** Tüm uydu haritasını taramak yüksek gecikmeye neden olur. Filtrenin mevcut konum kovaryansı ($3\sigma$) ve uçuş hızı kadar haritadan dinamik bir alt bölge (ROI) kesilir.
+* **Adım 2 (Öznitelik Çıkarımı):** Canlı kamera karesi ile kesilen harita parçası **SuperPoint** evrişimli sinir ağına sokularak anahtar noktalar ve tanımlayıcılar (descriptors) çıkarılır.
+* **Adım 3 (LightGlue Eşleme):** Transformer mimarili **LightGlue** ile noktalar eşleştirilir.
+* **Adım 4 (Geometrik ve İstatistiksel Kapılama):**
+  * Düz araziler için Homografi ($H$), engebeli araziler için Temel Matris ($F$) RANSAC modelleri yarıştırılır.
+  * Uçağın irtifasıyla piksel ölçeği tutarlılığı doğrulanır.
+  * Mahalanobis kapısı ($d_M \le 9.21$) ile ani sıçramalar elenir.
+* **Adım 5 (Gecikmeli Güncelleme):** Çıkarım süresi $t_d$ kadar halka tamponda geçmişe dönülerek Kalman güncellemesi yapılır ve filtre güncel zamana kadar ileri simüle edilir.
 
 ---
 
